@@ -5,6 +5,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix
 from torch.autograd import Variable
 import matplotlib.pyplot as plt
+from sklearn.ensemble import RandomForestClassifier
 import IPython
 
 
@@ -22,7 +23,7 @@ class data_generator(object):
         self.get_indices = get_indices
         self.use_cuda = use_cuda
 
-    def generate(self,inputs,targets):
+    def generate(self, inputs, targets, balanced=False):
         """ Generates batches of samples
 
         :inputs: inputs (first dimension is number of samples)
@@ -37,6 +38,18 @@ class data_generator(object):
         # Indices of samples
         N = len(inputs)
         indices = np.arange(N)
+
+        if balanced:
+            classes = torch.unique(targets)
+            cl_size = []
+            for cl in classes:
+                cl_size.append(targets == cl).sum()
+            max_cl_size = torch.max(cl_size)
+            indices_extra = []
+            for k, cl in enumerate(classes):
+                indices_extra.append(torch.random.choose(torch.where(targets == cl), max_cl_size - cl_size[k]))
+            indices_extra = np.asarray(indices_extra)
+            indices = np.concatenate([indices, indices_extra])
 
         # Shuffle if true
         if self.shuffle:
@@ -66,6 +79,8 @@ class data_cls():
         self.vf = []
         self.vf_next = []
         self.nv = []
+        self.td = []
+        self.td_next = []
         self.pid = []
         self.eyeid = []
         self.labels = []
@@ -81,11 +96,34 @@ class data_cls():
 
         return 0
 
+def define_ae(d_in, d_out):
+
+    model = torch.nn.Sequential(
+          torch.nn.Linear(d_in, 4),
+          torch.nn.ReLU(),
+          torch.nn.Linear(4, 4),
+          torch.nn.ReLU(),
+          torch.nn.Linear(4, 4),
+          torch.nn.ReLU(),
+          torch.nn.Linear(4, 4),
+          torch.nn.ReLU(),
+          torch.nn.Linear(4, 4),
+          torch.nn.ReLU(),
+          torch.nn.Linear(4, 4),
+          torch.nn.ReLU(),
+          torch.nn.Linear(4, 1024),
+          torch.nn.ReLU(),
+          torch.nn.Linear(1024, d_out),
+          torch.nn.LogSoftmax(dim=1)
+        )
+
+    return model
+
 class net_class(torch.nn.Module):
     """
     This makes a network object for reconstruction operation.
     """
-    def __init__(self, d_in, d_hidden, d_out, is_conv = False):
+    def __init__(self, d_in, d_out, d_hidden):
 
         super(net_class, self).__init__()
         self.d_in = d_in
@@ -97,7 +135,7 @@ class net_class(torch.nn.Module):
         self.linear_4 = torch.nn.Linear(d_hidden, d_hidden)
         self.linear_5 = torch.nn.Linear(d_hidden, d_out)
         self.relu = torch.nn.ReLU()
-        self.logsoftmax = torch.nn.LogSoftmax()
+        self.logsoftmax = torch.nn.LogSoftmax(dim=1)
 
     def forward(self, input_):
         
@@ -128,15 +166,27 @@ def get_data(dataset):
         # Delete blind spots
         vf = np.delete(vf, [25, 34], axis=1)
         nv = np.delete(nv, [25, 34], axis=1)
+        td = vf - nv
 
         eyeId = np.loadtxt('/home/ubelix/artorg/kucur/Workspace/Data/rotterdam_data/eyeId_rotterdam.csv')
 
-    # elif self.dataset_name == 'bern':
+    elif dataset == 'bern':
+
+        data_file = "/home/ubelix/artorg/kucur/Workspace/Data/insel_data/insel_data_G_program_extracted_on_09_04_2020_no_nans.npz"
+        vf = np.load(data_file)['ph1']
+        pId = np.load(data_file)['pid']
+        nv = np.load(data_file)['nv']
+        td = vf - nv
+        n_samples = len(vf)
+        eyeId = np.load(data_file)['eyes']
+        # md = -1 * np.load(data_file)['md']
+
+        eyeId = (eyeId == "OS ").astype('uint8')
 
     else:
         warnings.warn("No dataset found.")
         return -1
-        
+
     # Compute mean deviation (MD)
     md = (vf - nv).mean(1)
 
@@ -160,7 +210,9 @@ def get_data(dataset):
             idx = np.where((pId == each_id) & (eyeId == e))[0]
             for k in range(len(idx)-1):
                 data.vf.append(vf[idx[k]])
+                data.td.append(td[idx[k]])
                 data.vf_next.append(vf[idx[k+1]])
+                data.td_next.append(td[idx[k+1]])
                 data.labels.append(groups[idx[k+1]])
                 data.labels_num.append(groups_num[idx[k+1]])
                 data.pid.append(each_id)
@@ -182,24 +234,25 @@ def split_data(data):
     indices_val = np.where(np.isin(data.pid, pid_val))[0]
     indices_test = np.where(np.isin(data.pid, pid_test))[0]
 
-    x_train = data.vf[indices_train]
-    x_val = data.vf[indices_val]
-    x_test = data.vf[indices_test]
+    x_train = data.td[indices_train]
+    x_val = data.td[indices_val]
+    x_test = data.td[indices_test]
     y_train = data.labels_num[indices_train]
     y_val = data.labels_num[indices_val]
     y_test = data.labels_num[indices_test]   
 
     return x_train, y_train, x_val, y_val, x_test, y_test, indices_train, indices_val, indices_test
 
-def draw_qualitative_perf(x_curr, x_next, y_true, y_pred, num_class, true_class):
+def draw_qualitative_perf(x_curr, x_next, y_true, y_pred, classes, true_class):
     
     current_examples = []
     next_examples = []
     heights = []
+    num_class = len(classes)
     N = (y_true == true_class).sum()
     for cl in range(num_class):
-        current_examples.append(x_curr[(y_pred == cl) & (y_true == true_class)])
-        next_examples.append(x_next[(y_pred == cl) & (y_true == true_class)])
+        current_examples.append(x_curr[(y_pred == classes[cl]) & (y_true == true_class)])
+        next_examples.append(x_next[(y_pred == classes[cl]) & (y_true == true_class)])
         heights.append(current_examples[-1].shape[0]/N)
 
     heights = np.asarray(heights)
@@ -215,7 +268,7 @@ def draw_qualitative_perf(x_curr, x_next, y_true, y_pred, num_class, true_class)
 
         ax = fig.add_subplot(specs[row, 1])
         im = ax.imshow(next_examples[row], vmin=0, vmax=40)
-        ax.set_title('True = {:d}, Pred = {:d}'.format(true_class, row))
+        ax.set_title('True = {:d}, Pred = {:d}'.format(true_class, classes[row]))
         plt.axis('off')
 
     plt.colorbar(im)
@@ -225,16 +278,16 @@ def draw_qualitative_perf(x_curr, x_next, y_true, y_pred, num_class, true_class)
 def main():
 
     # DEFS
-    d_in = 52
     d_out = 4
-    d_hidden = 512
+    d_hidden = 4
     device = 'cpu'
     loss = 0
     n_epochs = 150
     model_filename = 'dummy'
 
     # Get the data
-    data = get_data('rotterdam')
+    data = get_data('bern')
+    d_in = data.vf.shape[1]
 
     # Split the data
     input_tr, output_tr, input_val, output_val, input_test, \
@@ -244,15 +297,16 @@ def main():
     device = torch.device(device)
 
     # Get the empty net
-    model = net_class(d_in, d_out, d_hidden)
+    # model = net_class(d_in, d_out, d_hidden)
+    model = define_ae(d_in, d_out)
     model = model.to(device)
 
     # Define the optimizer
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
 
     # Scheduler
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.1)
-    
+  
     # Mini-batch generator 
     data_gen = data_generator(32)
 
@@ -315,20 +369,32 @@ def main():
         scheduler.step()
 
     # Test
-    model_best = net_class(d_in, d_out, d_hidden)
+    # model_best = net_class(d_in, d_out, d_hidden)
+    model_best = define_ae(d_in, d_out)
     model_best = model_best.to(device)
     model_best.load_state_dict(torch.load(model_filename, map_location=device))
     pred_test = model_best(input_test)
     pred_labels = torch.argmax(pred_test, dim=1)
     acc = (pred_labels == output_test).sum().item()/N_test
     conf_mat = confusion_matrix(output_test.data.numpy(), pred_labels.data.numpy())
-    print(acc)
+    print("Accuracy for network: {:.3f}".format(acc))
     print(conf_mat)
 
-    fig = draw_qualitative_perf(input_test.data.numpy(), data.vf_next[ind_test],\
-         output_test.data.numpy(), pred_labels.data.numpy(), 4, 0)
+    # fig = draw_qualitative_perf(input_test.data.numpy(), data.vf_next[ind_test],\
+    #      output_test.data.numpy(), pred_labels.data.numpy(), [1, 2], 2)
 
-    plt.show()
+    # plt.show()
+
+    # Random Forest
+    cl = RandomForestClassifier(n_estimators=100, max_depth=100, \
+        class_weight="balanced", random_state=32)
+    cl.fit(input_tr.data.numpy(), output_tr.data.numpy())
+    pred_rf = cl.predict(input_test.data.numpy())
+    acc_rf = (pred_rf == output_test.data.numpy()).sum().item()/N_test
+    conf_mat_rf = confusion_matrix(output_test.data.numpy(), pred_rf)
+    print("Accuracy for Random Forest: {:.3f}".format(acc_rf))
+    print(conf_mat_rf)
+
     IPython.embed()
 
 if __name__ == "__main__":
