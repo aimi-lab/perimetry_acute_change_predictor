@@ -4,7 +4,8 @@ import os, warnings
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix
 from torch.autograd import Variable
-import matplotlib.pyplot as plt
+import pandas as pd
+# import matplotlib.pyplot as plt
 from sklearn.ensemble import RandomForestClassifier
 import IPython
 
@@ -105,15 +106,15 @@ def define_ae(d_in, d_out):
           torch.nn.ReLU(),
           torch.nn.Linear(4, 4),
           torch.nn.ReLU(),
-          torch.nn.Linear(4, 4),
+          torch.nn.Linear(4, 128),
           torch.nn.ReLU(),
-          torch.nn.Linear(4, 4),
+          torch.nn.Linear(128, 128),
           torch.nn.ReLU(),
-          torch.nn.Linear(4, 4),
+          torch.nn.Linear(128, 512),
           torch.nn.ReLU(),
-          torch.nn.Linear(4, 1024),
+          torch.nn.Linear(512, 512),
           torch.nn.ReLU(),
-          torch.nn.Linear(1024, d_out),
+          torch.nn.Linear(512, d_out),
           torch.nn.LogSoftmax(dim=1)
         )
 
@@ -284,9 +285,10 @@ def main():
     loss = 0
     n_epochs = 150
     model_filename = 'dummy'
+    dataset_name = 'rotterdam'
 
     # Get the data
-    data = get_data('bern')
+    data = get_data(dataset_name)
     d_in = data.vf.shape[1]
 
     # Split the data
@@ -302,7 +304,7 @@ def main():
     model = model.to(device)
 
     # Define the optimizer
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.00001)
 
     # Scheduler
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.1)
@@ -376,10 +378,17 @@ def main():
     pred_test = model_best(input_test)
     pred_labels = torch.argmax(pred_test, dim=1)
     acc = (pred_labels == output_test).sum().item()/N_test
-    conf_mat = confusion_matrix(output_test.data.numpy(), pred_labels.data.numpy())
+    conf_mat_net = confusion_matrix(output_test.data.numpy(), pred_labels.data.numpy())
     print("Accuracy for network: {:.3f}".format(acc))
     print(conf_mat)
 
+    df_net = pd.DataFrame(conf_mat_net, columns=['Healthy', 'Early', 'Moderate', 'Advanced'], \
+        index=['Healthy', 'Early', 'Moderate', 'Advanced'])
+
+    plt = pretty_plot_confusion_matrix(df_net, annot=True, cmap="Oranges", fmt='.2f', fz=11,
+      lw=0.5, cbar=False, figsize=[8,8], show_null_values=1, pred_val_axis='y')
+    plt.title('Confusion matrix for the network ({})'.format(dataset_name))
+    plt.savefig('confusion_matrix_net_{}'.format(dataset_name))
     # fig = draw_qualitative_perf(input_test.data.numpy(), data.vf_next[ind_test],\
     #      output_test.data.numpy(), pred_labels.data.numpy(), [1, 2], 2)
 
@@ -394,6 +403,14 @@ def main():
     conf_mat_rf = confusion_matrix(output_test.data.numpy(), pred_rf)
     print("Accuracy for Random Forest: {:.3f}".format(acc_rf))
     print(conf_mat_rf)
+
+    df_rf = pd.DataFrame(conf_mat_rf, columns=['Healthy', 'Early', 'Moderate', 'Advanced'], \
+        index=['Healthy', 'Early', 'Moderate', 'Advanced'])
+
+    plt = pretty_plot_confusion_matrix(df_rf, annot=True, cmap="Oranges", fmt='.2f', fz=11,
+      lw=0.5, cbar=False, figsize=[8,8], show_null_values=1, pred_val_axis='y')
+    plt.title('Confusion matrix for the random forest ({})'.format(dataset_name))
+    plt.savefig('confusion_matrix_rf_{}'.format(dataset_name))
 
     IPython.embed()
 
