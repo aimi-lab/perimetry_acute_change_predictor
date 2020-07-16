@@ -5,8 +5,13 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix
 from torch.autograd import Variable
 import pandas as pd
-# import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
+from matplotlib.patches import Circle
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+from mpl_toolkits.axes_grid1 import ImageGrid
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.svm import SVC
+from plot_conf_mat import pretty_plot_confusion_matrix
 import IPython
 
 
@@ -16,7 +21,7 @@ class data_generator(object):
 
     """ 
 
-    def  __init__(self,batch_size,shuffle = True, get_indices = False, use_cuda = False):
+    def  __init__(self, batch_size, shuffle = True, get_indices = False, use_cuda = False):
         
         "Initilaization"
         self.batch_size = batch_size
@@ -44,14 +49,15 @@ class data_generator(object):
             classes = torch.unique(targets)
             cl_size = []
             for cl in classes:
-                cl_size.append(targets == cl).sum()
-            max_cl_size = torch.max(cl_size)
+                cl_size.append((targets == cl).sum())
+            max_cl_size = max(cl_size)
             indices_extra = []
             for k, cl in enumerate(classes):
-                indices_extra.append(torch.random.choose(torch.where(targets == cl), max_cl_size - cl_size[k]))
-            indices_extra = np.asarray(indices_extra)
+                indices_extra.append(np.random.choice(np.where(targets == cl)[0], \
+                    (max_cl_size - cl_size[k]).numpy()))
+            indices_extra = np.concatenate(indices_extra)
             indices = np.concatenate([indices, indices_extra])
-
+            
         # Shuffle if true
         if self.shuffle:
             np.random.shuffle(indices)
@@ -84,6 +90,7 @@ class data_cls():
         self.td_next = []
         self.pid = []
         self.eyeid = []
+        self.labels_curr = []
         self.labels = []
         self.labels_num = []
         self.md_curr = []
@@ -156,7 +163,7 @@ class net_class(torch.nn.Module):
 
 def get_data(dataset):
     
-    if dataset == 'rotterdam':
+    if dataset == 'Rotterdam':
         # Get data
         data_file = '/home/ubelix/artorg/kucur/Workspace/Data/rotterdam_data/dynStaircase100RealizationsIPS.npz'
         vf = np.load(data_file)["vf_true"][:5108]
@@ -170,8 +177,9 @@ def get_data(dataset):
         td = vf - nv
 
         eyeId = np.loadtxt('/home/ubelix/artorg/kucur/Workspace/Data/rotterdam_data/eyeId_rotterdam.csv')
+        xy = np.loadtxt('/home/ubelix/artorg/kucur/Workspace/Data/p24d2.csv', skiprows=1, delimiter=',')
 
-    elif dataset == 'bern':
+    elif dataset == 'Bern':
 
         data_file = "/home/ubelix/artorg/kucur/Workspace/Data/insel_data/insel_data_G_program_extracted_on_09_04_2020_no_nans.npz"
         vf = np.load(data_file)['ph1']
@@ -179,10 +187,11 @@ def get_data(dataset):
         nv = np.load(data_file)['nv']
         td = vf - nv
         n_samples = len(vf)
-        eyeId = np.load(data_file)['eyes']
+        eyeId = np.load(data_file, allow_pickle=True)['eyes']
         # md = -1 * np.load(data_file)['md']
 
         eyeId = (eyeId == "OS ").astype('uint8')
+        xy = np.loadtxt('/home/ubelix/artorg/kucur/Workspace/Data/Gpattern.csv', skiprows=1, delimiter=',')
 
     else:
         warnings.warn("No dataset found.")
@@ -214,12 +223,14 @@ def get_data(dataset):
                 data.td.append(td[idx[k]])
                 data.vf_next.append(vf[idx[k+1]])
                 data.td_next.append(td[idx[k+1]])
+                data.labels_curr.append(groups_num[idx[k]])
                 data.labels.append(groups[idx[k+1]])
                 data.labels_num.append(groups_num[idx[k+1]])
                 data.pid.append(each_id)
                 data.eyeid.append(e)
                 data.md_curr.append(md[idx[k]])
                 data.md_next.append(md[idx[k+1]])
+                data.xy = xy
                 
     # Make arrays from the lists
     data.make_arrays()
@@ -276,6 +287,98 @@ def draw_qualitative_perf(x_curr, x_next, y_true, y_pred, classes, true_class):
     return fig
     #plt.colorbar(orientation='horizontal', fraction=.1)
 
+def generate_voronoi_images_given_image_size(data, xy_coordinates, image_size=(61, 61)):
+
+    """ 
+    Generates voronoi images using given values for patching colors and given coordiantes for seed points.
+    Here image size is fixed or given by the user.
+    Output conventions according to Theano CNN implemntation (4D tensor -- (number_of_samples, image_row, image_col))
+    
+    """
+
+    # Number of seed locations/points
+    num_locs = xy_coordinates.shape[0]
+    num_obs = data.shape[0]
+
+    # start from 0
+    x = np.zeros((num_locs, 1))
+    y = np.zeros((num_locs, 1))
+    x[:,0] = xy_coordinates[:,0]
+    y[:,0] = xy_coordinates[:,1]
+    x = x + int(image_size[0]/2)
+    y = y + int(image_size[1]/2)
+    voronoi_points = np.column_stack((x,y))
+
+    # A grid of full space points including seed ones
+    space_coordinates = np.mgrid[0:image_size[0], 0:image_size[1]]
+    x_coord = space_coordinates[0,:].flatten() # columns
+    y_coord = space_coordinates[1,:].flatten() # rows
+    space_coordinates = np.vstack((x_coord,y_coord)).transpose()
+
+    # Define an image
+    img_col_size = image_size[0]
+    img_row_size = image_size[1]
+    img = np.zeros((img_row_size, img_col_size))
+
+    # Fill in image
+    vor_images = np.zeros((num_obs, img_row_size, img_col_size))
+    for k in range(num_obs):
+        value_vector = data[k,:]
+        for img_col_ind, img_row_ind in space_coordinates:
+            dist = (voronoi_points[:, 0] - img_col_ind)**2 + (voronoi_points[:, 1] - img_row_ind)**2
+            idx = np.argmin(dist)
+            img[img_row_ind, img_col_ind] = value_vector[idx]
+
+        # Have to flip because of matrix conventions (y axis coordinates increase
+        # from down to up but a matrix row indices increase from up to down)
+        img = np.flipud(img)
+        vor_images[k, : , :] = img
+
+    return vor_images
+
+def draw_voronoi_samples(inputs_curr, inputs_next, labels_curr, labels_next, predicted, 
+                            xy, pids, eyes, mds_curr, mds_next, fldr):
+    
+    N = len(inputs_curr)
+    stages = ['Healthy', 'Early', 'Moderate', 'Advanced']
+    imgs_curr = generate_voronoi_images_given_image_size(inputs_curr, xy)
+    imgs_next = generate_voronoi_images_given_image_size(inputs_next, xy)
+    min_val = -5
+    max_val = 45
+    for k in range(N):
+        fig_grid = plt.figure()
+        img_list = [imgs_curr[k], imgs_next[k]]
+        grid = ImageGrid(fig_grid, 111, nrows_ncols=(1, 2),
+                        share_all=True,
+                        axes_pad=0.9,
+                        cbar_location='right', 
+                        direction='column',
+                        cbar_mode='edge',
+                        cbar_size='6%', cbar_pad=1)
+
+        titles= ['Current VF \nPat.#{:d}, Eye{:d}, MD={:.1f}, {}'.format(int(pids[k]), int(eyes[k]), mds_curr[k], stages[int(labels_curr[k])]),
+                'Next VF (Pred: {}) \nPat.#{:d}, Eye{:d}, MD={:.1f}, {}'.format(stages[int(predicted[k])], int(pids[k]), int(eyes[k]), mds_next[k], stages[int(labels_next[k])])]
+        
+        for i, axis in enumerate(grid):
+            fh = axis.imshow(img_list[i], clim=[min_val, max_val], cmap='jet')
+            fh.set_clip_path(Circle((30, 30), 30, transform=axis.transData))
+            axis.add_patch(Circle((45, 30), 3, fc='black'))
+            axis.set_xticks(np.arange(61, step=20))
+            axis.set_yticks(np.arange(61, step=20))
+            axis.set_xticklabels(np.arange(-30, 31, step=20))
+            axis.set_yticklabels(np.arange(30, -31, step=-20))
+            axis.spines['top'].set_visible(False)
+            axis.spines['right'].set_visible(False)
+            cbar = axis.cax.colorbar(fh)
+            # if i < len(inputs):
+            #     axis.set_title(r'Input \n $t_{N-{:d}}$')
+            axis.set_title(titles[i], fontsize=8)
+            cbar.ax.set_title('TD values [dB]', fontsize=8)
+
+        plt.savefig('{}/vor_fig_{:d}.pdf'.format(fldr, k+1), bbox_inches='tight')
+        plt.close()
+        # print('Image {:d} is done...'.format(k+1))
+
 def main():
 
     # DEFS
@@ -283,9 +386,9 @@ def main():
     d_hidden = 4
     device = 'cpu'
     loss = 0
-    n_epochs = 150
+    n_epochs = 4
     model_filename = 'dummy'
-    dataset_name = 'rotterdam'
+    dataset_name = 'Rotterdam'
 
     # Get the data
     data = get_data(dataset_name)
@@ -304,7 +407,7 @@ def main():
     model = model.to(device)
 
     # Define the optimizer
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.00001)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
 
     # Scheduler
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.1)
@@ -331,7 +434,7 @@ def main():
     best_val_loss = 1e6
     for epoch in range(n_epochs):
 
-        for input_batch, output_batch in data_gen.generate(input_tr, output_tr):
+        for input_batch, output_batch in data_gen.generate(input_tr, output_tr, balanced=False):
 
             # Feed-forward
             pred = model(input_batch)
@@ -380,7 +483,7 @@ def main():
     acc = (pred_labels == output_test).sum().item()/N_test
     conf_mat_net = confusion_matrix(output_test.data.numpy(), pred_labels.data.numpy())
     print("Accuracy for network: {:.3f}".format(acc))
-    print(conf_mat)
+    print(conf_mat_net)
 
     df_net = pd.DataFrame(conf_mat_net, columns=['Healthy', 'Early', 'Moderate', 'Advanced'], \
         index=['Healthy', 'Early', 'Moderate', 'Advanced'])
@@ -388,11 +491,24 @@ def main():
     plt = pretty_plot_confusion_matrix(df_net, annot=True, cmap="Oranges", fmt='.2f', fz=11,
       lw=0.5, cbar=False, figsize=[8,8], show_null_values=1, pred_val_axis='y')
     plt.title('Confusion matrix for the network ({})'.format(dataset_name))
-    plt.savefig('confusion_matrix_net_{}'.format(dataset_name))
+    plt.savefig('./results/confusion_matrix_net_{}.pdf'.format(dataset_name))
     # fig = draw_qualitative_perf(input_test.data.numpy(), data.vf_next[ind_test],\
     #      output_test.data.numpy(), pred_labels.data.numpy(), [1, 2], 2)
 
     # plt.show()
+
+    # Mistaken examples
+    mistaken_ind = ind_test[pred_labels != output_test]
+    if dataset_name == 'Rotterdam':
+        data.vf = np.insert(data.vf, 25, 0, 1)
+        data.vf = np.insert(data.vf, 34, 0, 1)
+        data.vf_next = np.insert(data.vf_next, 25, 0, 1)
+        data.vf_next = np.insert(data.vf_next, 34, 0, 1)
+  
+    draw_voronoi_samples(data.vf[mistaken_ind], data.vf_next[mistaken_ind],
+        data.labels_curr[mistaken_ind], data.labels_num[mistaken_ind], pred_labels[pred_labels != output_test], data.xy,
+        data.pid[mistaken_ind], data.eyeid[mistaken_ind], data.md_curr[mistaken_ind],
+        data.md_next[mistaken_ind], './results/network/mistaken_examples/')
 
     # Random Forest
     cl = RandomForestClassifier(n_estimators=100, max_depth=100, \
@@ -410,7 +526,38 @@ def main():
     plt = pretty_plot_confusion_matrix(df_rf, annot=True, cmap="Oranges", fmt='.2f', fz=11,
       lw=0.5, cbar=False, figsize=[8,8], show_null_values=1, pred_val_axis='y')
     plt.title('Confusion matrix for the random forest ({})'.format(dataset_name))
-    plt.savefig('confusion_matrix_rf_{}'.format(dataset_name))
+    plt.savefig('./results/confusion_matrix_rf_{}.pdf'.format(dataset_name))
+
+    idx = pred_rf != output_test.data.numpy()
+    mistaken_ind_rf = ind_test[idx]
+    draw_voronoi_samples(data.vf[mistaken_ind_rf], data.vf_next[mistaken_ind_rf],
+        data.labels_curr[mistaken_ind_rf], data.labels_num[mistaken_ind_rf], np.squeeze(pred_rf[idx]), 
+        data.xy, data.pid[mistaken_ind_rf], data.eyeid[mistaken_ind_rf], data.md_curr[mistaken_ind_rf],
+        data.md_next[mistaken_ind_rf], './results/random_forest/mistaken_examples/')
+
+    # SVM
+    clf_svm = SVC(kernel='poly', degree=1, class_weight='balanced', gamma='auto', C=0.01)
+    clf_svm.fit(input_tr.data.numpy(), output_tr.data.numpy())
+    pred_svm = clf_svm.predict(input_test.data.numpy())
+    acc_svm = (pred_svm == output_test.data.numpy()).sum().item()/N_test
+    conf_mat_svm = confusion_matrix(output_test.data.numpy(), pred_svm)
+    print("Accuracy for SVM: {:.3f}".format(acc_svm))
+    print(conf_mat_svm)
+
+    df_svm = pd.DataFrame(conf_mat_svm, columns=['Healthy', 'Early', 'Moderate', 'Advanced'], \
+        index=['Healthy', 'Early', 'Moderate', 'Advanced'])
+
+    plt = pretty_plot_confusion_matrix(df_svm, annot=True, cmap="Oranges", fmt='.2f', fz=11,
+      lw=0.5, cbar=False, figsize=[8,8], show_null_values=1, pred_val_axis='y')
+    plt.title('Confusion matrix for the SVM ({})'.format(dataset_name))
+    plt.savefig('./results/confusion_matrix_svm_{}.pdf'.format(dataset_name))
+
+    idx = pred_svm != output_test.data.numpy()
+    mistaken_ind_svm = ind_test[pred_svm != output_test.data.numpy()]
+    draw_voronoi_samples(data.vf[mistaken_ind_svm], data.vf_next[mistaken_ind_svm],
+        data.labels_curr[mistaken_ind_svm], data.labels_num[mistaken_ind_svm], np.squeeze(pred_svm[idx]),
+        data.xy, data.pid[mistaken_ind_svm], data.eyeid[mistaken_ind_svm], data.md_curr[mistaken_ind_svm],
+        data.md_next[mistaken_ind_svm], './results/SVM/mistaken_examples/')
 
     IPython.embed()
 

@@ -24,8 +24,9 @@ def generate_fun(inputs, targets, balanced=True):
         max_cl_size = max(cl_size)
         indices_extra = []
         for k, cl in enumerate(classes):
-            indices_extra.append(torch.random.choose(torch.where(targets == cl), max_cl_size - cl_size[k]))
-        indices_extra = np.asarray(indices_extra)
+            indices_extra.append(np.random.choice(np.where(targets == cl)[0], \
+                (max_cl_size - cl_size[k]).numpy()))
+        indices_extra = np.concatenate(indices_extra)
         indices = np.concatenate([indices, indices_extra])
 
     # Shuffle if true
@@ -56,4 +57,3 @@ inputs = torch.from_numpy(inputs).type(torch.FloatTensor)
 targets = torch.from_numpy(targets).type(torch.FloatTensor)
 
 generate_fun(inputs, targets, balanced=True)
-
