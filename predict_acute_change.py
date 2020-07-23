@@ -251,7 +251,7 @@ def split_data(data):
     x_test = data.td[indices_test]
     y_train = data.labels_num[indices_train]
     y_val = data.labels_num[indices_val]
-    y_test = data.labels_num[indices_test]   
+    y_test = data.labels_num[indices_test]
 
     return x_train, y_train, x_val, y_val, x_test, y_test, indices_train, indices_val, indices_test
 
@@ -275,11 +275,11 @@ def draw_qualitative_perf(x_curr, x_next, y_true, y_pred, classes, true_class):
     specs = fig.add_gridspec(ncols=2, nrows=num_class, width_ratios=widths, height_ratios=heights)
     for row in range(num_class):
         ax = fig.add_subplot(specs[row, 0])
-        im = ax.imshow(current_examples[row], vmin=0, vmax=40)
+        im = ax.imshow(current_examples[row], vmin=-40, vmax=30)
         plt.axis('off')
 
         ax = fig.add_subplot(specs[row, 1])
-        im = ax.imshow(next_examples[row], vmin=0, vmax=40)
+        im = ax.imshow(next_examples[row], vmin=-40, vmax=30)
         ax.set_title('True = {:d}, Pred = {:d}'.format(true_class, classes[row]))
         plt.axis('off')
 
@@ -337,14 +337,14 @@ def generate_voronoi_images_given_image_size(data, xy_coordinates, image_size=(6
     return vor_images
 
 def draw_voronoi_samples(inputs_curr, inputs_next, labels_curr, labels_next, predicted, 
-                            xy, pids, eyes, mds_curr, mds_next, fldr):
+                            xy, pids, eyes, mds_curr, mds_next, fldr, conf_level=None):
     
     N = len(inputs_curr)
     stages = ['Healthy', 'Early', 'Moderate', 'Advanced']
     imgs_curr = generate_voronoi_images_given_image_size(inputs_curr, xy)
     imgs_next = generate_voronoi_images_given_image_size(inputs_next, xy)
-    min_val = -5
-    max_val = 45
+    min_val = -40
+    max_val = 30
     for k in range(N):
         fig_grid = plt.figure()
         img_list = [imgs_curr[k], imgs_next[k]]
@@ -356,6 +356,10 @@ def draw_voronoi_samples(inputs_curr, inputs_next, labels_curr, labels_next, pre
                         cbar_mode='edge',
                         cbar_size='6%', cbar_pad=1)
 
+        if conf_level is not None:
+            titles= ['Current VF \nPat.#{:d}, Eye{:d}, MD={:.1f}, {}'.format(int(pids[k]), int(eyes[k]), mds_curr[k], stages[int(labels_curr[k])]),
+                'Next VF (Pred: {}, conf_level:{:.2f}) \nPat.#{:d}, Eye{:d}, MD={:.1f}, {}'.format(stages[int(predicted[k])], conf_level[k], int(pids[k]), int(eyes[k]), mds_next[k], stages[int(labels_next[k])])]
+        
         titles= ['Current VF \nPat.#{:d}, Eye{:d}, MD={:.1f}, {}'.format(int(pids[k]), int(eyes[k]), mds_curr[k], stages[int(labels_curr[k])]),
                 'Next VF (Pred: {}) \nPat.#{:d}, Eye{:d}, MD={:.1f}, {}'.format(stages[int(predicted[k])], int(pids[k]), int(eyes[k]), mds_next[k], stages[int(labels_next[k])])]
         
@@ -372,8 +376,8 @@ def draw_voronoi_samples(inputs_curr, inputs_next, labels_curr, labels_next, pre
             cbar = axis.cax.colorbar(fh)
             # if i < len(inputs):
             #     axis.set_title(r'Input \n $t_{N-{:d}}$')
-            axis.set_title(titles[i], fontsize=8)
-            cbar.ax.set_title('TD values [dB]', fontsize=8)
+            axis.set_title(titles[i], fontsize=7)
+            cbar.ax.set_title('TD values [dB]', fontsize=7)
 
         plt.savefig('{}/vor_fig_{:d}.pdf'.format(fldr, k+1), bbox_inches='tight')
         plt.close()
@@ -386,7 +390,7 @@ def main():
     d_hidden = 4
     device = 'cpu'
     loss = 0
-    n_epochs = 4
+    n_epochs = 150
     model_filename = 'dummy'
     dataset_name = 'Rotterdam'
 
@@ -497,18 +501,30 @@ def main():
 
     # plt.show()
 
+    # Compute entorpy -- for uncertainty
+    probs = pred_test.data.numpy()
+    entropy = -1 * np.sum(probs * np.log(probs), axis=1)
+
+    import IPython
+    IPython.embed()
+
     # Mistaken examples
     mistaken_ind = ind_test[pred_labels != output_test]
+    entr_at_mistakes = entorpy[pred_labels != output_test]
     if dataset_name == 'Rotterdam':
         data.vf = np.insert(data.vf, 25, 0, 1)
         data.vf = np.insert(data.vf, 34, 0, 1)
         data.vf_next = np.insert(data.vf_next, 25, 0, 1)
         data.vf_next = np.insert(data.vf_next, 34, 0, 1)
-  
-    draw_voronoi_samples(data.vf[mistaken_ind], data.vf_next[mistaken_ind],
+        data.td = np.insert(data.td, 25, 0, 1)
+        data.td = np.insert(data.td, 34, 0, 1)
+        data.td_next = np.insert(data.td_next, 25, 0, 1)
+        data.td_next = np.insert(data.td_next, 34, 0, 1)
+
+    draw_voronoi_samples(data.td[mistaken_ind], data.td_next[mistaken_ind],
         data.labels_curr[mistaken_ind], data.labels_num[mistaken_ind], pred_labels[pred_labels != output_test], data.xy,
         data.pid[mistaken_ind], data.eyeid[mistaken_ind], data.md_curr[mistaken_ind],
-        data.md_next[mistaken_ind], './results/network/mistaken_examples/')
+        data.md_next[mistaken_ind], './results/network/mistaken_examples/', conf_level=entr_at_mistakes)
 
     # Random Forest
     cl = RandomForestClassifier(n_estimators=100, max_depth=100, \
@@ -530,7 +546,7 @@ def main():
 
     idx = pred_rf != output_test.data.numpy()
     mistaken_ind_rf = ind_test[idx]
-    draw_voronoi_samples(data.vf[mistaken_ind_rf], data.vf_next[mistaken_ind_rf],
+    draw_voronoi_samples(data.td[mistaken_ind_rf], data.td_next[mistaken_ind_rf],
         data.labels_curr[mistaken_ind_rf], data.labels_num[mistaken_ind_rf], np.squeeze(pred_rf[idx]), 
         data.xy, data.pid[mistaken_ind_rf], data.eyeid[mistaken_ind_rf], data.md_curr[mistaken_ind_rf],
         data.md_next[mistaken_ind_rf], './results/random_forest/mistaken_examples/')
@@ -554,7 +570,7 @@ def main():
 
     idx = pred_svm != output_test.data.numpy()
     mistaken_ind_svm = ind_test[pred_svm != output_test.data.numpy()]
-    draw_voronoi_samples(data.vf[mistaken_ind_svm], data.vf_next[mistaken_ind_svm],
+    draw_voronoi_samples(data.td[mistaken_ind_svm], data.td_next[mistaken_ind_svm],
         data.labels_curr[mistaken_ind_svm], data.labels_num[mistaken_ind_svm], np.squeeze(pred_svm[idx]),
         data.xy, data.pid[mistaken_ind_svm], data.eyeid[mistaken_ind_svm], data.md_curr[mistaken_ind_svm],
         data.md_next[mistaken_ind_svm], './results/SVM/mistaken_examples/')
