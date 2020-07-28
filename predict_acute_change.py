@@ -336,8 +336,8 @@ def generate_voronoi_images_given_image_size(data, xy_coordinates, image_size=(6
 
     return vor_images
 
-def draw_voronoi_samples(inputs_curr, inputs_next, labels_curr, labels_next, predicted, 
-                            xy, pids, eyes, mds_curr, mds_next, fldr, conf_level=None):
+def draw_voronoi_samples(inputs_curr, inputs_next, labels_curr, labels_next, predicted,
+                            xy, pids, eyes, mds_curr, mds_next, fldr, probs, uncertainty=None):
     
     N = len(inputs_curr)
     stages = ['Healthy', 'Early', 'Moderate', 'Advanced']
@@ -356,11 +356,12 @@ def draw_voronoi_samples(inputs_curr, inputs_next, labels_curr, labels_next, pre
                         cbar_mode='edge',
                         cbar_size='6%', cbar_pad=1)
 
-        if conf_level is not None:
+        if uncertainty is not None:
             titles= ['Current VF \nPat.#{:d}, Eye{:d}, MD={:.1f}, {}'.format(int(pids[k]), int(eyes[k]), mds_curr[k], stages[int(labels_curr[k])]),
-                'Next VF (Pred: {}, conf_level:{:.2f}) \nPat.#{:d}, Eye{:d}, MD={:.1f}, {}'.format(stages[int(predicted[k])], conf_level[k], int(pids[k]), int(eyes[k]), mds_next[k], stages[int(labels_next[k])])]
-        
-        titles= ['Current VF \nPat.#{:d}, Eye{:d}, MD={:.1f}, {}'.format(int(pids[k]), int(eyes[k]), mds_curr[k], stages[int(labels_curr[k])]),
+                'Next VF (Pred: {}, uncert.:{:.2f}) \nPat.#{:d}, Eye{:d}, MD={:.1f}, {}\nH={:.2f}, E={:.2f}, \nM={:.2f}, A={:.2f}'.format(stages[int(predicted[k])], uncertainty[k], 
+                int(pids[k]), int(eyes[k]), mds_next[k], stages[int(labels_next[k])], probs[k, 0], probs[k, 1], probs[k, 2], probs[k, 3])]
+        else:
+            titles= ['Current VF \nPat.#{:d}, Eye{:d}, MD={:.1f}, {}'.format(int(pids[k]), int(eyes[k]), mds_curr[k], stages[int(labels_curr[k])]),
                 'Next VF (Pred: {}) \nPat.#{:d}, Eye{:d}, MD={:.1f}, {}'.format(stages[int(predicted[k])], int(pids[k]), int(eyes[k]), mds_next[k], stages[int(labels_next[k])])]
         
         for i, axis in enumerate(grid):
@@ -391,8 +392,23 @@ def main():
     device = 'cpu'
     loss = 0
     n_epochs = 150
-    model_filename = 'dummy'
     dataset_name = 'Rotterdam'
+    folder_name = './results/{}'.format(dataset_name)
+    model_filename = '{}/model'.format(folder_name)
+    
+    # Create the folders
+    if not os.path.exists('{}/network/'.format(folder_name)):
+        os.makedirs('{}/network/all_test_examples'.format(folder_name))
+        os.makedirs('{}/network/mistaken_examples'.format(folder_name))
+        os.makedirs('{}/network/mistaken_examples_too_confident'.format(folder_name))
+
+    if not os.path.exists('{}/random_forest/'.format(folder_name)):
+        os.makedirs('{}/random_forest/all_test_examples'.format(folder_name))
+        os.makedirs('{}/random_forest/mistaken_examples'.format(folder_name))
+
+    if not os.path.exists('{}/SVM/'.format(folder_name)):
+        os.makedirs('{}/SVM/all_test_examples'.format(folder_name))
+        os.makedirs('{}/SVM/mistaken_examples'.format(folder_name))
 
     # Get the data
     data = get_data(dataset_name)
@@ -493,24 +509,27 @@ def main():
         index=['Healthy', 'Early', 'Moderate', 'Advanced'])
 
     plt = pretty_plot_confusion_matrix(df_net, annot=True, cmap="Oranges", fmt='.2f', fz=11,
-      lw=0.5, cbar=False, figsize=[8,8], show_null_values=1, pred_val_axis='y')
+      lw=0.5, cbar=False, figsize=[8, 8], show_null_values=1, pred_val_axis='y')
     plt.title('Confusion matrix for the network ({})'.format(dataset_name))
-    plt.savefig('./results/confusion_matrix_net_{}.pdf'.format(dataset_name))
+    plt.savefig('{}/network/confusion_matrix.pdf'.format(folder_name))
     # fig = draw_qualitative_perf(input_test.data.numpy(), data.vf_next[ind_test],\
     #      output_test.data.numpy(), pred_labels.data.numpy(), [1, 2], 2)
 
     # plt.show()
 
-    # Compute entorpy -- for uncertainty
-    probs = pred_test.data.numpy()
+    # Compute entropy -- for uncertainty
+    probs = np.exp(pred_test.data.numpy())
     entropy = -1 * np.sum(probs * np.log(probs), axis=1)
 
-    import IPython
-    IPython.embed()
+    acc_pred = (pred_labels == output_test).data.numpy()
+    err_pred = ~acc_pred
+    too_conf_inds = (err_pred) & (entropy < 0.4)
+    mistakend_ind_too_confident = ind_test[(err_pred) & (entropy < 0.4)]
 
     # Mistaken examples
-    mistaken_ind = ind_test[pred_labels != output_test]
-    entr_at_mistakes = entorpy[pred_labels != output_test]
+    inds = pred_labels != output_test
+    mistaken_ind = ind_test[inds]
+    entr_at_mistakes = entropy[pred_labels != output_test]
     if dataset_name == 'Rotterdam':
         data.vf = np.insert(data.vf, 25, 0, 1)
         data.vf = np.insert(data.vf, 34, 0, 1)
@@ -522,15 +541,30 @@ def main():
         data.td_next = np.insert(data.td_next, 34, 0, 1)
 
     draw_voronoi_samples(data.td[mistaken_ind], data.td_next[mistaken_ind],
-        data.labels_curr[mistaken_ind], data.labels_num[mistaken_ind], pred_labels[pred_labels != output_test], data.xy,
+        data.labels_curr[mistaken_ind], data.labels_num[mistaken_ind], pred_labels[inds], data.xy,
         data.pid[mistaken_ind], data.eyeid[mistaken_ind], data.md_curr[mistaken_ind],
-        data.md_next[mistaken_ind], './results/network/mistaken_examples/', conf_level=entr_at_mistakes)
+        data.md_next[mistaken_ind], '{}/network/mistaken_examples/'.format(folder_name), probs[inds],
+        uncertainty=entr_at_mistakes)
+    
+    entr_at_too_conf_mistakes = entropy[(err_pred) & (entropy < 0.4)]
+    draw_voronoi_samples(data.td[mistakend_ind_too_confident], data.td_next[mistakend_ind_too_confident],
+        data.labels_curr[mistakend_ind_too_confident], data.labels_num[mistakend_ind_too_confident], pred_labels[too_conf_inds], data.xy,
+        data.pid[mistakend_ind_too_confident], data.eyeid[mistakend_ind_too_confident], data.md_curr[mistakend_ind_too_confident],
+        data.md_next[mistakend_ind_too_confident], '{}/network/mistaken_examples_too_confident/'.format(folder_name), probs[too_conf_inds],
+        uncertainty=entr_at_too_conf_mistakes)
+
+    draw_voronoi_samples(data.td[ind_test], data.td_next[ind_test],
+        data.labels_curr[ind_test], data.labels_num[ind_test], pred_labels, data.xy,
+        data.pid[ind_test], data.eyeid[ind_test], data.md_curr[ind_test],
+        data.md_next[ind_test], '{}/network/mistaken_examples_too_confident/'.format(folder_name), probs,
+        uncertainty=entropy)
 
     # Random Forest
-    cl = RandomForestClassifier(n_estimators=100, max_depth=100, \
+    clf_rf = RandomForestClassifier(n_estimators=100, max_depth=100, \
         class_weight="balanced", random_state=32)
-    cl.fit(input_tr.data.numpy(), output_tr.data.numpy())
-    pred_rf = cl.predict(input_test.data.numpy())
+    clf_rf.fit(input_tr.data.numpy(), output_tr.data.numpy())
+    pred_rf = clf_rf.predict(input_test.data.numpy())
+    probs_rf = clf_rf.predict_proba(input_test.data.numpy()) + 1e-10 # Added small number to avoid numerical issues
     acc_rf = (pred_rf == output_test.data.numpy()).sum().item()/N_test
     conf_mat_rf = confusion_matrix(output_test.data.numpy(), pred_rf)
     print("Accuracy for Random Forest: {:.3f}".format(acc_rf))
@@ -540,21 +574,28 @@ def main():
         index=['Healthy', 'Early', 'Moderate', 'Advanced'])
 
     plt = pretty_plot_confusion_matrix(df_rf, annot=True, cmap="Oranges", fmt='.2f', fz=11,
-      lw=0.5, cbar=False, figsize=[8,8], show_null_values=1, pred_val_axis='y')
+      lw=0.5, cbar=False, figsize=[8, 8], show_null_values=1, pred_val_axis='y')
     plt.title('Confusion matrix for the random forest ({})'.format(dataset_name))
-    plt.savefig('./results/confusion_matrix_rf_{}.pdf'.format(dataset_name))
+    plt.savefig('{}/random_forest/confusion_matrix.pdf'.format(folder_name))
 
+    entr_rf = -1 * np.sum(probs_rf * np.log(probs_rf), axis=1)
     idx = pred_rf != output_test.data.numpy()
     mistaken_ind_rf = ind_test[idx]
     draw_voronoi_samples(data.td[mistaken_ind_rf], data.td_next[mistaken_ind_rf],
         data.labels_curr[mistaken_ind_rf], data.labels_num[mistaken_ind_rf], np.squeeze(pred_rf[idx]), 
         data.xy, data.pid[mistaken_ind_rf], data.eyeid[mistaken_ind_rf], data.md_curr[mistaken_ind_rf],
-        data.md_next[mistaken_ind_rf], './results/random_forest/mistaken_examples/')
+        data.md_next[mistaken_ind_rf], '{}/random_forest/mistaken_examples/'.format(folder_name), probs_rf[idx], uncertainty=entr_rf[idx])
+
+    draw_voronoi_samples(data.td[ind_test], data.td_next[ind_test],
+        data.labels_curr[ind_test], data.labels_num[ind_test], np.squeeze(pred_rf), 
+        data.xy, data.pid[ind_test], data.eyeid[ind_test], data.md_curr[ind_test],
+        data.md_next[ind_test], '{}/random_forest/all_test_examples/'.format(folder_name), probs_rf, uncertainty=entr_rf)
 
     # SVM
-    clf_svm = SVC(kernel='poly', degree=1, class_weight='balanced', gamma='auto', C=0.01)
+    clf_svm = SVC(kernel='poly', degree=1, class_weight='balanced', gamma='auto', C=0.01, probability=True)
     clf_svm.fit(input_tr.data.numpy(), output_tr.data.numpy())
     pred_svm = clf_svm.predict(input_test.data.numpy())
+    probs_svm = clf_svm.predict_proba(input_test.data.numpy()) + 1e-10 # Added small number to avoid numerical issues
     acc_svm = (pred_svm == output_test.data.numpy()).sum().item()/N_test
     conf_mat_svm = confusion_matrix(output_test.data.numpy(), pred_svm)
     print("Accuracy for SVM: {:.3f}".format(acc_svm))
@@ -566,14 +607,20 @@ def main():
     plt = pretty_plot_confusion_matrix(df_svm, annot=True, cmap="Oranges", fmt='.2f', fz=11,
       lw=0.5, cbar=False, figsize=[8,8], show_null_values=1, pred_val_axis='y')
     plt.title('Confusion matrix for the SVM ({})'.format(dataset_name))
-    plt.savefig('./results/confusion_matrix_svm_{}.pdf'.format(dataset_name))
+    plt.savefig('{}/SVM/confusion_matrix.pdf'.format(folder_name))
 
+    entr_svm = -1 * np.sum(probs_svm * np.log(probs_svm), axis=1)
     idx = pred_svm != output_test.data.numpy()
     mistaken_ind_svm = ind_test[pred_svm != output_test.data.numpy()]
     draw_voronoi_samples(data.td[mistaken_ind_svm], data.td_next[mistaken_ind_svm],
         data.labels_curr[mistaken_ind_svm], data.labels_num[mistaken_ind_svm], np.squeeze(pred_svm[idx]),
         data.xy, data.pid[mistaken_ind_svm], data.eyeid[mistaken_ind_svm], data.md_curr[mistaken_ind_svm],
-        data.md_next[mistaken_ind_svm], './results/SVM/mistaken_examples/')
+        data.md_next[mistaken_ind_svm], '{}/SVM/mistaken_examples/'.format(folder_name), probs_svm[idx], uncertainty=entr_svm[idx])
+
+    draw_voronoi_samples(data.td[ind_test], data.td_next[ind_test],
+        data.labels_curr[ind_test], data.labels_num[ind_test], np.squeeze(pred_svm),
+        data.xy, data.pid[ind_test], data.eyeid[ind_test], data.md_curr[ind_test],
+        data.md_next[ind_test], '{}/SVM/all_test_examples/'.format(folder_name), probs_svm, uncertainty=entr_svm)
 
     IPython.embed()
 
