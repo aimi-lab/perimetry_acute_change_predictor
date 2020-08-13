@@ -164,6 +164,7 @@ def pretty_plot_confusion_matrix(df_cm, annot=True, cmap="Oranges", fmt='.2f', f
     for t in ax.xaxis.get_major_ticks():
         t.tick1On = False
         t.tick2On = False
+        # t.Tick.
     for t in ax.yaxis.get_major_ticks():
         t.tick1On = False
         t.tick2On = False
