@@ -162,12 +162,16 @@ def pretty_plot_confusion_matrix(df_cm, annot=True, cmap="Oranges", fmt='.2f', f
 
     # Turn off all the ticks
     for t in ax.xaxis.get_major_ticks():
-        t.tick1On = False
-        t.tick2On = False
+        # t.tick1On = False
+        # t.tick2On = False
+        t.tick1line.set_visible = False
+        t.tick2line.set_visible = False
         # t.Tick.
     for t in ax.yaxis.get_major_ticks():
-        t.tick1On = False
-        t.tick2On = False
+        # t.tick1On = False
+        # t.tick2On = False
+        t.tick1line.set_visible = False
+        t.tick2line.set_visible = False
 
     #face colors list
     quadmesh = ax.findobj(QuadMesh)[0]
@@ -178,7 +182,7 @@ def pretty_plot_confusion_matrix(df_cm, annot=True, cmap="Oranges", fmt='.2f', f
     text_add = []; text_del = [];
     posi = -1 #from left to right, bottom to top.
     for t in ax.collections[0].axes.texts: #ax.texts:
-        pos = np.array( t.get_position()) - [0.5,0.5]
+        pos = np.array( t.get_position()) - [0.5, 0.5]
         lin = int(pos[1]); col = int(pos[0]);
         posi += 1
         #print ('>>> pos: %s, posi: %s, val: %s, txt: %s' %(pos, posi, array_df[lin][col], t.get_text()))
@@ -202,7 +206,7 @@ def pretty_plot_confusion_matrix(df_cm, annot=True, cmap="Oranges", fmt='.2f', f
     ax.set_ylabel(ylbl)
     plt.tight_layout()  #set layout slim
     
-    return plt
+    return plt, fig
 
 
 def plot_confusion_matrix_from_data(y_test, predictions, columns=None, annot=True, cmap="Oranges",
@@ -228,11 +232,9 @@ def plot_confusion_matrix_from_data(y_test, predictions, columns=None, annot=Tru
     figsize=[9,9];
     show_null_values = 2
     df_cm = DataFrame(confm, index=columns, columns=columns)
-    pretty_plot_confusion_matrix(df_cm, fz=fz, cmap=cmap, figsize=figsize, show_null_values=show_null_values, pred_val_axis=pred_val_axis)
+    plt, fig = pretty_plot_confusion_matrix(df_cm, fz=fz, cmap=cmap, figsize=figsize, show_null_values=show_null_values, pred_val_axis=pred_val_axis)
 #
-
-
-
+    return plt, fig
 #
 #TEST functions
 #
