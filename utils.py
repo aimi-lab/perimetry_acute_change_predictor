@@ -9,6 +9,7 @@ from mpl_toolkits.axes_grid1 import ImageGrid
 from plot_conf_mat import pretty_plot_confusion_matrix
 from sklearn.model_selection import train_test_split
 from torch.autograd import Variable
+from torchvision.models import resnet18
 from sklearn.preprocessing import StandardScaler, RobustScaler, MinMaxScaler
 sys.path.append('/home/ubelix/artorg/kucur/Workspace/Modules')
 import utils_pytorch
@@ -74,7 +75,7 @@ class data_generator(object):
         self.use_cuda = use_cuda
 
     def generate(self, inputs, targets, balanced=False):
-        """ Generates batches of samples 
+        """ Generates batches of samples
         for Pytorch!!!
 
         :inputs: inputs (first dimension is number of samples)
@@ -150,6 +151,13 @@ class data_cls():
         attrs = list(self.__dict__.keys())
         for attr in attrs:
             setattr(self, attr, np.asarray(getattr(self, attr)).squeeze())
+
+    def slice_arrays(self, indices):
+        """Slices the arrays with given indices"""
+
+        attrs = list(self.__dict__.keys())
+        for attr in attrs:
+            setattr(self, attr, attr[indices])
 
         return 0
 
@@ -305,7 +313,7 @@ def prepare_data(data, vf_format="straight"):
         x_val = np.concatenate([x_val, data.age_curr[indices_val, None], time_diffs[indices_val, None]], axis=1)
         x_test = np.concatenate([x_test, data.age_curr[indices_test, None], time_diffs[indices_test, None]], axis=1)
 
-        scaler = RobustScaler() # MinMaxScaler(feature_range=[-1, 1])
+        scaler = StandardScaler() # MinMaxScaler(feature_range=[-1, 1])
         scaler.fit(x_train)
         x_train = scaler.transform(x_train)
         x_val = scaler.transform(x_val)
@@ -393,23 +401,15 @@ def define_ae(d_in, d_out, d_hidden=256):
     #       torch.nn.LogSoftmax(dim=1)
     #     )
 
+
     model = torch.nn.Sequential(
           torch.nn.Linear(d_in, d_hidden),
           torch.nn.ReLU(),
           torch.nn.Linear(d_hidden, d_hidden),
           torch.nn.ReLU(),
-        #   torch.nn.Linear(d_hidden, d_hidden),
-        #   torch.nn.ReLU(),
-        #   torch.nn.Linear(d_hidden, d_hidden),
-        #   torch.nn.ReLU(),
-        #   torch.nn.Linear(d_hidden, d_hidden),
-        #   torch.nn.ReLU(),
-        #   torch.nn.Linear(d_hidden, d_hidden),
-        #   torch.nn.ReLU(),
-        #   torch.nn.Linear(d_hidden, d_hidden),
-        #   torch.nn.ReLU(),
+          torch.nn.Linear(d_hidden, d_hidden),
+          torch.nn.ReLU(),
           torch.nn.Linear(d_hidden, d_out),
-          torch.nn.LogSoftmax(dim=1)
         )
 
     return model
@@ -420,9 +420,9 @@ class simple_conv_net(torch.nn.Module):
         conv_kernel_size = 3
         pool_kernel_size = 2
         self.batch_size = batch_size
-        self.conv1 = torch.nn.Conv2d(3, 64, 3)
-        self.conv2 = torch.nn.Conv2d(64, 32, 3)
-        self.conv3 = torch.nn.Conv2d(32, 16, 3)
+        self.conv1 = torch.nn.Conv2d(3, 16, 3)
+        self.conv2 = torch.nn.Conv2d(16, 8, 3)
+        self.conv3 = torch.nn.Conv2d(8, 4, 3)
         self.pool = torch.nn.MaxPool2d(2, 2)
 
         # Compute the size
@@ -434,11 +434,11 @@ class simple_conv_net(torch.nn.Module):
         in_size = utils_pytorch.conv2d_output_shape(in_size, kernel_size=conv_kernel_size)
         in_size = utils_pytorch.conv2d_output_shape(in_size, kernel_size=pool_kernel_size, stride=pool_kernel_size)
 
-        ch_size = 16
+        ch_size = self.conv3.out_channels
         self.fc1 = torch.nn.Linear(ch_size * in_size[0] * in_size[1], 128)
         self.fc2 = torch.nn.Linear(128, 32)
         self.fc3 = torch.nn.Linear(32, d_out)
-        self.logsoftmax = torch.nn.LogSoftmax(dim=1)
+        # self.logsoftmax = torch.nn.LogSoftmax(dim=1)
 
     def forward(self, x):
 
@@ -450,9 +450,11 @@ class simple_conv_net(torch.nn.Module):
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
-        x = self.logsoftmax(x)
+        # x = self.logsoftmax(x)
 
         return x
+
+
 
 # VISUALIZE
 
