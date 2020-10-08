@@ -132,7 +132,7 @@ class data_cls():
         """Initializes the created object"""
         self.vf = []
         self.vf_next = []
-        self.nv = []
+        # self.nv = []
         self.td = []
         self.td_next = []
         self.pid = []
@@ -157,9 +157,131 @@ class data_cls():
 
         attrs = list(self.__dict__.keys())
         for attr in attrs:
-            setattr(self, attr, attr[indices])
+            if attr is not "xy":
+                setattr(self, attr, getattr(self, attr)[indices])
 
-        return 0
+def get_longitudinal_data(dataset, number_of_required_vfs, keep_blind_spot=False, use_all_samples=True, filename=None):
+    
+    if dataset == 'Rotterdam':
+
+        # Get data
+        data_file = '/home/ubelix/artorg/kucur/Workspace/Data/rotterdam_data/rotterdam_numpy_data_05_08_2020.npz'
+        with np.load(data_file, allow_pickle=True) as peri_data:
+            vf = peri_data["vf"]
+            td = peri_data["td"]
+            pId = peri_data["pid"]
+            nv = peri_data["nv"]
+            ages = peri_data['ages']
+            eyeId = peri_data['eyes']
+        n_samples = len(vf)
+        xy = np.loadtxt('/home/ubelix/artorg/kucur/Workspace/Data/p24d2.csv', skiprows=1, delimiter=',')
+        td[np.isnan(td)] = -40
+        td[td==-1000] = -40
+
+        if keep_blind_spot is False:
+            # Then delete blind spots
+            vf = np.delete(vf, [25, 34], axis=1)
+            nv = np.delete(nv, [25, 34], axis=1)
+            td = np.delete(td, [25, 34], axis=1)
+            xy = np.delete(xy, [25, 34], axis=0)
+
+    elif dataset == 'Bern':
+
+        data_file = "/home/ubelix/artorg/kucur/Workspace/Data/insel_data/insel_data_G_program_extracted_on_04_08_2020_no_nans.npz"
+        with np.load(data_file, allow_pickle=True) as peri_data:
+            vf = peri_data['ph1']
+            pId = peri_data['pid']
+            nv = peri_data['nv']
+            ages = peri_data['ages']
+            eyeId = peri_data['eyes']
+            xy = peri_data['xy']
+        td = vf - nv
+        n_samples = len(vf)
+        # md = -1 * np.load(data_file)['md']
+        eyeId = (eyeId == "OS ").astype('uint8')
+        # xy = np.loadtxt('/home/ubelix/artorg/kucur/Workspace/Data/Gpattern.csv', skiprows=1, delimiter=',')
+
+    else:
+        warnings.warn("No dataset found.")
+        return -1
+
+    # Compute mean deviation (MD)
+    md = (vf - nv).mean(1)
+
+    # Classify VFs into stages
+    groups = np.array(n_samples * ['normal'], dtype='object')
+    groups[(md <= -2) & (md > -6)] = 'early'
+    groups[(md <= -6) & (md > -12)] = 'moderate'
+    groups[(md <= -12)] = 'advanced'
+
+    groups_num = np.zeros(groups.shape)
+    groups_num[groups == 'normal'] = 0
+    groups_num[groups == 'early'] = 1
+    groups_num[groups == 'moderate'] = 2
+    groups_num[groups == 'advanced'] = 3
+
+    # Do we limit the time diffs between samples
+    if use_all_samples:
+        min_time_diff = 0
+        max_time_diff = 1e10
+    else:
+        min_time_diff = 5
+        max_time_diff = 24
+
+    # Prepare data
+    data = data_cls()
+    pId_u = np.unique(pId)
+    for each_id in pId_u:
+        for e in [0, 1]:
+            idx = np.where((pId == each_id) & (eyeId == e))[0]
+            aux = ages[idx]
+            if np.all(np.diff(aux) >= 0): # Should be sorted!
+                number_of_available_vfs = len(idx)
+                if (number_of_required_vfs <= (number_of_available_vfs-1)):
+                    for k in range(number_of_available_vfs-number_of_required_vfs):
+                        age_stack = [ages[idx[k+n]] for n in range(number_of_required_vfs)]
+                        time_diff = (ages[idx[k+number_of_required_vfs]] - ages[idx[k+number_of_required_vfs-1]])/30.0
+                        if np.all(np.diff(age_stack)/30.0 >= min_time_diff) and np.all(np.diff(age_stack)/30.0 <= max_time_diff) and \
+                                     ((time_diff >= min_time_diff) & (time_diff <= max_time_diff)):
+                            vf_stack = [vf[idx[k+n]] for n in range(number_of_required_vfs)]
+                            td_stack = [td[idx[k+n]] for n in range(number_of_required_vfs)]
+                            label_curr_stack = [groups_num[idx[k+n]] for n in range(number_of_required_vfs)]
+                            md_stack = [md[idx[k+n]] for n in range(number_of_required_vfs)]
+                            age_stack = [ages[idx[k+n]] for n in range(number_of_required_vfs)]
+                            data.vf.append(np.stack(vf_stack))
+                            data.td.append(np.stack(td_stack))
+                            data.vf_next.append(vf[idx[k + number_of_required_vfs]])
+                            data.td_next.append(td[idx[k + number_of_required_vfs]])
+                            data.labels_curr.append(np.stack(label_curr_stack))
+                            data.labels.append(groups[idx[k + number_of_required_vfs]])
+                            data.labels_num.append(groups_num[idx[k + number_of_required_vfs]])
+                            data.pid.append(each_id)
+                            data.eyeid.append(e)
+                            data.md_curr.append(md_stack)
+                            data.md_next.append(md[idx[k + number_of_required_vfs]])
+                            data.age_curr.append(age_stack)
+                            data.age_next.append(ages[idx[k + number_of_required_vfs]])
+                            data.labels_binary.append((groups_num[idx[k + number_of_required_vfs]] - \
+                            groups_num[idx[k + number_of_required_vfs - 1]]) >= 1) # 1 if prgressed, 0 otherwise
+            else:
+                print("{:.0f}-{:.0f}".format(each_id, e))
+
+    # Add the coordinates
+    data.xy = xy
+
+    # Make arrays from the lists
+    data.make_arrays()
+
+    # Add dummy dimensions
+
+    # Check the number of samples 
+    print("Number of total samples:{:d}".format(data.vf.shape[0]))
+    
+    # Save if you want
+    if filename is not None:
+        save_object(data, filename)
+    
+    return data
 
 def get_data(dataset, use_all_samples=False, keep_blind_spot=False, make_images=False, filename=None):
     
@@ -269,6 +391,7 @@ def get_data(dataset, use_all_samples=False, keep_blind_spot=False, make_images=
                             data.md_next.append(md[idx[k+1]])
                             data.age_curr.append(ages[idx[k]])
                             data.age_next.append(ages[idx[k+1]])
+                            data.labels_binary.append((groups_num[idx[k+1]] - groups_num[idx[k]]) >= 1) # 1 if prgressed, 0 otherwise
                 else: # not sorted
                     print("{:.0f}-{:.0f}".format(each_id, e))
     data.xy = xy
@@ -286,7 +409,7 @@ def get_data(dataset, use_all_samples=False, keep_blind_spot=False, make_images=
 
     return data
 
-def prepare_data(data, vf_format="straight"):
+def prepare_data(data, vf_format="straight", add_md=False):
     
     # Split based on the patients
     pid_indices = np.unique(data.pid)
@@ -313,11 +436,16 @@ def prepare_data(data, vf_format="straight"):
         x_val = np.concatenate([x_val, data.age_curr[indices_val, None], time_diffs[indices_val, None]], axis=1)
         x_test = np.concatenate([x_test, data.age_curr[indices_test, None], time_diffs[indices_test, None]], axis=1)
 
-        scaler = StandardScaler() # MinMaxScaler(feature_range=[-1, 1])
-        scaler.fit(x_train)
-        x_train = scaler.transform(x_train)
-        x_val = scaler.transform(x_val)
-        x_test = scaler.transform(x_test)
+        if add_md:
+            x_train = np.concatenate([x_train, data.md_curr[indices_train, None]], axis=1)
+            x_val = np.concatenate([x_val, data.md_curr[indices_val, None]], axis=1)
+            x_test = np.concatenate([x_test, data.md_curr[indices_test, None]], axis=1)
+
+        # scaler = StandardScaler() # MinMaxScaler(feature_range=[-1, 1])
+        # scaler.fit(x_train)
+        # x_train = scaler.transform(x_train)
+        # x_val = scaler.transform(x_val)
+        # x_test = scaler.transform(x_test)
     
     elif vf_format == "voronoi":
 
@@ -341,7 +469,7 @@ def prepare_data(data, vf_format="straight"):
 
         # Normalize channels independently
         x_train, mean_tr, std_tr = standardize_image(x_train)
-        x_val, _, _ = standardize_image(x_val, mean_tr, std_tr)  
+        x_val, _, _ = standardize_image(x_val, mean_tr, std_tr)
         x_test, _, _ = standardize_image(x_test, mean_tr, std_tr)
 
     return x_train, y_train, x_val, y_val, x_test, y_test, indices_train, indices_val, indices_test
@@ -455,7 +583,6 @@ class simple_conv_net(torch.nn.Module):
         return x
 
 
-
 # VISUALIZE
 
 def generate_voronoi_images_given_image_size(data, xy_coordinates, image_size=(61, 61)):
@@ -494,7 +621,7 @@ def generate_voronoi_images_given_image_size(data, xy_coordinates, image_size=(6
     # Fill in image
     vor_images = np.zeros((num_obs, img_row_size, img_col_size))
     for k in range(num_obs):
-        value_vector = data[k,:]
+        value_vector = data[k, :]
         for img_col_ind, img_row_ind in space_coordinates:
             dist = (voronoi_points[:, 0] - img_col_ind)**2 + (voronoi_points[:, 1] - img_row_ind)**2
             idx = np.argmin(dist)

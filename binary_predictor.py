@@ -20,10 +20,10 @@ import IPython
 def main():
 
     # DEFS
-    input_type = "voronoi"
+    input_type = "straight"
     d_out = 1
     d_hidden = 256 # for fully connected network
-    device = 'cuda'
+    device = 'cpu'
     loss = 0
     n_epochs = 50
     batch_size = 32
@@ -89,6 +89,22 @@ def main():
 
     # Get the writer
     writer = SummaryWriter(run_foldername)
+
+    # #
+    # new_input = np.concatenate([input_tr, input_val], axis=0)
+    # new_output = np.concatenate([output_tr, output_val], axis=0)
+    # clf_rf = RandomForestClassifier(n_estimators=10000, min_impurity_decrease=0, class_weight="balanced")
+    # clf_rf.fit(new_input, new_output)
+    # pred_clf_rf = clf_rf.predict(input_test)
+    # fpr_roc, tpr_roc, thresholds_roc = roc_curve(output_test, pred_clf_rf, pos_label=1)
+    # area_under_roc = auc(fpr_roc, tpr_roc)
+    # prec, recall, thresholds_pr = precision_recall_curve(output_test, pred_clf_rf, pos_label=1)
+    # area_under_prec = auc(recall, prec)
+    # print("AUC-ROC: {:.3f}".format(area_under_roc))
+    # print("AUC-PREC: {:.3f}".format(area_under_prec))
+
+    # import IPython
+    # IPython.embed()
 
     # Move to torch
     input_tr = torch.from_numpy(input_tr).type(torch.FloatTensor).to(device)
